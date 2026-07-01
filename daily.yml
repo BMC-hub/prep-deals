@@ -1,0 +1,31 @@
+name: prep-deals-daily
+on:
+  schedule:
+    - cron: "0 13 * * *"   # 13:00 UTC daily (~6am PT / 9am ET). Adjust as you like.
+  workflow_dispatch: {}     # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write           # to commit prices.db back
+  pages: write
+  id-token: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - run: python scraper.py config.yaml
+      - run: python dashboard.py
+      - name: commit history
+        run: |
+          git config user.name "prep-deals-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add prices.db index.html
+          git commit -m "daily run $(date -u +%F)" || echo "no changes"
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: "." }
+      - uses: actions/deploy-pages@v4
