@@ -1,95 +1,47 @@
-"""Per-site extractors. Each adapter takes raw HTML (+ base url) and returns a
-list of items: {product_id, title, url, price, was_price(optional)}.
+# Prep Deals
 
-product_id = the product URL path (stable), used as the history key.
-"""
-import re
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
+Daily price tracker for prepper/tactical/survival gear. Scrapes a list of
+sale/deal pages, logs every product's current price, and flags only *real* deals
+— verified against the price history it builds and (where possible) cross-site,
+so fake "was $X" markups don't fool it.
 
-MONEY = r'\$([0-9][0-9,]*(?:\.[0-9]{2})?)'
+## Files
+- `config.yaml` — your 14 sites, each with an adapter + tier. Toggle `enabled`.
+- `adapters.py` — per-site extractors (preppingdeals, woocommerce, generic).
+- `scraper.py` — fetches each page, runs its adapter, logs prices to `prices.db`.
+- `db.py` — SQLite price history (also stores the site's untrusted "was" price).
+- `detect.py` — deal logic: own-history gate + cross-site gate.
+- `dashboard.py` — writes `index.html`.
+- `keepa.py` — optional Amazon real-history check (needs KEEPA_KEY).
+- `fetch_js.py` — optional Playwright fetcher for JS/anti-bot sites.
+- `.github/workflows/daily.yml` — runs daily, free, on GitHub Actions.
+- `SITES.md` — per-site feasibility (which sites work now vs need Playwright).
 
-def _f(s):
-    try: return float(str(s).replace(",", ""))
-    except Exception: return None
+## Which sites work now
+Enabled today (static/server-rendered): preppingdeals, venturesurplus,
+sportsmansguide, primaryarms, budsgunshop, armysurplusworld, tacticalsurplususa,
+propper. The other six (opticsplanet, backcountry, als, armynavysales,
+tacticalgear, battlehawkarmory) are `enabled: false` + `js: true` — turn them on
+after installing Playwright (see fetch_js.py). Details in SITES.md.
 
-# ---- 1. preppingdeals.net : "Title - $now (was $was)" links ----
-def preppingdeals(html, base):
-    soup = BeautifulSoup(html, "html.parser")
-    items = []
-    for a in soup.select('a[href*="/deals/"]'):
-        txt = a.get_text(" ", strip=True)
-        m = re.search(r'(.+?)\s*-\s*' + MONEY + r'\s*\(was\s*' + MONEY + r'\)', txt)
-        if not m: continue
-        items.append({
-            "product_id": a.get("href"),
-            "title": m.group(1).strip(),
-            "url": urljoin(base, a.get("href")),
-            "price": _f(m.group(2)),
-            "was_price": _f(m.group(3)),
-        })
-    return items
+## Run locally
+    pip install -r requirements.txt
+    python scraper.py config.yaml     # fetch + log prices
+    python dashboard.py               # build index.html
+    open index.html
 
-# ---- 2. WooCommerce (venturesurplus) : product cards w/ current price ----
-def woocommerce(html, base):
-    soup = BeautifulSoup(html, "html.parser")
-    items = []
-    for li in soup.select('li.product, ul.products li'):
-        a = li.select_one('a[href*="/product"]') or li.find("a", href=True)
-        if not a: continue
-        title_el = li.select_one('.woocommerce-loop-product__title, h2, h3')
-        # current price = last <ins> amount, else the (only) amount
-        ins = li.select_one('ins .woocommerce-Price-amount, ins')
-        amt = li.select_one('.price .woocommerce-Price-amount')
-        price = None; was = None
-        prices = [ _f(re.sub(r'[^0-9.]', '', e.get_text())) for e in
-                   li.select('.woocommerce-Price-amount') ]
-        prices = [p for p in prices if p]
-        if prices:
-            price = prices[-1]
-            if len(prices) >= 2: was = prices[0]
-        if price is None: continue
-        items.append({
-            "product_id": a.get("href"),
-            "title": (title_el.get_text(strip=True) if title_el else a.get_text(strip=True))[:120],
-            "url": urljoin(base, a.get("href")),
-            "price": price, "was_price": was,
-        })
-    return items
+## Deploy (free, always-on)
+1. Push this folder to a new GitHub repo.
+2. Settings > Pages > Source: GitHub Actions.
+3. Runs daily; dashboard updates automatically. Run manually from the Actions tab.
 
-# ---- 3. Generic: JSON-LD offers + microdata + common price classes ----
-import json
-def generic(html, base):
-    soup = BeautifulSoup(html, "html.parser")
-    items = []
-    # JSON-LD Product/ItemList
-    for tag in soup.find_all("script", type="application/ld+json"):
-        try: data = json.loads(tag.string or "")
-        except Exception: continue
-        for node in (data if isinstance(data, list) else [data]):
-            if not isinstance(node, dict): continue
-            if node.get("@type") == "Product":
-                off = node.get("offers") or {}
-                if isinstance(off, list): off = off[0] if off else {}
-                p = _f(off.get("price"))
-                if p:
-                    items.append({"product_id": node.get("url") or node.get("name"),
-                                  "title": node.get("name"), "url": node.get("url") or base,
-                                  "price": p, "was_price": None})
-    if items: return items
-    # microdata fallback
-    for el in soup.select('[itemtype*="Product"]'):
-        name = el.select_one('[itemprop=name]')
-        price = el.select_one('[itemprop=price]')
-        link = el.select_one('a[href]')
-        p = _f(price.get("content") or (price.get_text() if price else "")) if price else None
-        if p and link:
-            items.append({"product_id": link.get("href"), "title": name.get_text(strip=True) if name else "",
-                          "url": urljoin(base, link.get("href")), "price": p, "was_price": None})
-    return items
+## How a deal is decided
+Flagged only if current price is >= `min_drop_pct` below the trailing median AND
+within `atl_tolerance_pct` of the lowest price we've logged (and, if the same
+item is tracked on 2+ sites, it's the cheapest). Under `min_points_for_verified`
+data points it shows as UNVERIFIED. The site's own "was" price is stored for
+reference only and never used to decide a deal.
 
-REGISTRY = {
-    "preppingdeals": preppingdeals,
-    "woocommerce": woocommerce,
-    "generic": generic,
-}
+## Adding the Amazon check (recommended for preppingdeals)
+Most preppingdeals items are Amazon. Set `KEEPA_KEY` (Keepa API, paid) to verify
+each against real Amazon 90-day/all-time lows — the strongest fake-markup check.

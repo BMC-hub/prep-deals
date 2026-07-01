@@ -1,104 +1,45 @@
-# Prep Deals — watchlist of deal/sale pages to scrub daily.
-# tier is informational; `adapter` picks the parser; `js: true` needs Playwright.
-settings:
-  min_drop_pct: 15
-  atl_tolerance_pct: 5
-  cross_site_tolerance_pct: 3
-  min_points_for_verified: 10
-  request_delay_sec: 3
-  user_agent: "Mozilla/5.0 (compatible; PrepDealsBot/1.0; personal price tracker)"
+# Prep Deals — Build Plan
 
-sites:
-  # ---- STATIC: work with the basic scraper today ----
-  - id: preppingdeals
-    url: "https://www.preppingdeals.net/"
-    adapter: preppingdeals
-    tier: static
-    enabled: true
+## Goal
+Auto-scrub a fixed list of prepper/survival retailer pages daily, log prices,
+and flag only *real* deals — verified against price history and cross-site
+prices, ignoring fake "was $X" markups.
 
-  - id: venturesurplus
-    url: "https://www.venturesurplus.com/shop/?on_sale=1"
-    base: "https://www.venturesurplus.com/"
-    adapter: woocommerce
-    tier: static
-    enabled: true
+## Why this design
+- Retailer "was/now" strikethroughs are the thing that gets faked. The only
+  trustworthy signals are (a) your own logged price history and (b) the same
+  product on other sites. This system uses both.
+- Niche prepper sites mostly serve static HTML with little anti-bot, so simple
+  HTTP scraping works. No third-party price history exists for them, so we build
+  our own over time.
 
-  - id: sportsmansguide
-    url: "https://www.sportsmansguide.com/productlist?sn=13"
-    adapter: generic          # tune selector after first raw-HTML run
-    tier: static
-    enabled: true
+## Architecture
+GitHub Actions (daily cron, free, always-on)
+  -> scraper.py  reads config.yaml (your URLs + price selectors), fetches pages
+  -> db.py       SQLite prices.db: one price row per product per run
+  -> detect.py   flags a deal only if history gate AND cross-site gate pass
+  -> dashboard.py writes index.html
+  -> GitHub Pages hosts the dashboard, refreshes each run
 
-  - id: primaryarms
-    url: "https://www.primaryarms.com/"
-    adapter: generic
-    tier: static
-    enabled: true
+## Deal-detection rules (the core value)
+1. History gate: current price >= min_drop_pct below trailing median AND within
+   atl_tolerance of the all-time low we've logged. Kills fake markups — inflate-
+   then-discount keeps the median high, so the "sale" reads as noise.
+2. Cross-site gate (product on 2+ listed sites): flagged only if cheapest live
+   listing or within tolerance.
+3. Cold-start: under ~10 data points a flag is UNVERIFIED (shown separately).
 
-  - id: budsgunshop
-    url: "https://www.budsgunshop.com/"
-    adapter: generic
-    tier: static
-    enabled: true
+Cross-site matching: normalized brand + model/name, plus UPC/GTIN when present.
 
-  # ---- SERVER-RENDERED: parse from raw HTML, may need a selector tweak ----
-  - id: armysurplusworld
-    url: "https://www.armysurplusworld.com/dailydeals"
-    adapter: generic
-    tier: server
-    enabled: true
+## What you provide
+Product URLs (or category pages) + the price CSS selector per site. Template in
+config.yaml. I can auto-detect selectors once you give the URLs.
 
-  - id: tacticalsurplususa
-    url: "https://tacticalsurplususa.com/"
-    adapter: generic
-    tier: server
-    enabled: true
+## Cost
+$0 — GitHub Actions + GitHub Pages free tiers. VPS only if you later want
+sub-hourly checks.
 
-  - id: propper
-    url: "https://www.propper.com/sale.html"
-    adapter: generic
-    tier: server
-    enabled: true
-
-  # ---- JS / ANTI-BOT: need the Playwright fetcher (js: true) ----
-  - id: opticsplanet
-    url: "https://www.opticsplanet.com/clearance-sale.html"
-    adapter: generic
-    tier: js
-    js: true
-    enabled: false
-
-  - id: backcountry
-    url: "https://www.backcountry.com/rc/flash-sale"
-    adapter: generic
-    tier: js
-    js: true
-    enabled: false
-
-  - id: als
-    url: "https://www.als.com/sale"
-    adapter: generic
-    tier: js
-    js: true
-    enabled: false
-
-  - id: armynavysales
-    url: "https://www.armynavysales.com/new-and-on-sale.html"
-    adapter: generic
-    tier: js
-    js: true
-    enabled: false
-
-  - id: tacticalgear
-    url: "https://tacticalgear.com/"
-    adapter: generic
-    tier: js
-    js: true
-    enabled: false
-
-  - id: battlehawkarmory
-    url: "https://battlehawkarmory.com/product-tag/daily-deals"
-    adapter: generic
-    tier: js
-    js: true
-    enabled: false
+## Honest risks
+- A site adding Cloudflare needs a Playwright fallback (per-site, more fragile).
+- Cross-site check only works for products carried by 2+ of your sites.
+- First ~2 weeks build history; early flags are UNVERIFIED by design.

@@ -1,34 +1,33 @@
-"""SQLite price-history store (listing-page model)."""
-import sqlite3, datetime, os
-DB_PATH = os.environ.get("PREP_DB", os.path.join(os.path.dirname(__file__), "prices.db"))
+"""Optional: verify Amazon items against REAL price history via Keepa API.
 
-def conn():
-    c = sqlite3.connect(DB_PATH)
-    c.execute("""CREATE TABLE IF NOT EXISTS prices(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        product_id TEXT NOT NULL, site TEXT, brand TEXT, name TEXT, url TEXT,
-        price REAL NOT NULL, was_price REAL, currency TEXT DEFAULT 'USD',
-        ts TEXT NOT NULL)""")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_pid ON prices(product_id)")
-    return c
+Most preppingdeals.net items are Amazon links. Keepa tracks true Amazon price
+history, so this is the strongest fake-markup check available. Requires a Keepa
+API key (paid, ~EUR15/mo). Set env KEEPA_KEY to enable; otherwise it's skipped
+and the system falls back to its own logged history.
 
-def record(product_id, site, brand, name, url, price, was_price=None, currency="USD"):
-    c = conn()
-    c.execute("""INSERT INTO prices(product_id,site,brand,name,url,price,was_price,currency,ts)
-                 VALUES(?,?,?,?,?,?,?,?,?)""",
-              (product_id, site, brand, name, url, price, was_price, currency,
-               datetime.datetime.utcnow().isoformat()))
-    c.commit(); c.close()
+Returns dict: {'amazon_low_90d': float, 'amazon_current': float} or None.
+"""
+import os, re, requests
 
-def history(product_id):
-    c = conn()
-    rows = c.execute("SELECT price, ts FROM prices WHERE product_id=? ORDER BY ts",
-                     (product_id,)).fetchall()
-    c.close(); return [(r[0], r[1]) for r in rows]
+def asin_from_url(url):
+    m = re.search(r'/(?:dp|gp/product|d)/([A-Z0-9]{10})', url or "")
+    return m.group(1) if m else None
 
-def latest_by_product():
-    c = conn()
-    rows = c.execute("""SELECT p.product_id,p.brand,p.name,p.url,p.price,p.currency,p.ts,p.site,p.was_price
-        FROM prices p JOIN (SELECT product_id, MAX(ts) mx FROM prices GROUP BY product_id) m
-        ON p.product_id=m.product_id AND p.ts=m.mx""").fetchall()
-    c.close(); return rows
+def lookup(url):
+    key = os.environ.get("KEEPA_KEY")
+    asin = asin_from_url(url)
+    if not key or not asin:
+        return None
+    try:
+        r = requests.get("https://api.keepa.com/product",
+                         params={"key": key, "domain": 1, "asin": asin, "stats": 90},
+                         timeout=25)
+        d = r.json().get("products", [{}])[0]
+        stats = d.get("stats", {})
+        # Keepa prices are in cents; index 0 = Amazon price
+        cur = stats.get("current", [None])[0]
+        low = (stats.get("min", [[None, None]])[0] or [None, None])[1]
+        f = lambda c: round(c/100, 2) if isinstance(c, (int, float)) and c > 0 else None
+        return {"amazon_current": f(cur), "amazon_low_90d": f(low)}
+    except Exception:
+        return None
