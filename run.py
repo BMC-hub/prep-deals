@@ -56,19 +56,56 @@ def ad_woocommerce(h, base):
         out.append({"product_id": a.get("href"), "title": (t.get_text(strip=True) if t else a.get_text(strip=True))[:120],
                     "url": urljoin(base, a.get("href")), "price": ps[-1], "was_price": ps[0] if len(ps) >= 2 else None})
     return out
+def _price_from(el):
+    for sel in ['[data-price-amount]','.price--withoutTax','[data-product-price-without-tax]',
+                '.special-price .price','.price-item--sale','ins .amount','.sale-price',
+                '[itemprop=price]','.price','[class*=price]']:
+        e = el.select_one(sel)
+        if e:
+            raw = e.get('content') or e.get('data-price-amount') or e.get('data-price') or e.get_text(" ")
+            m = re.search(MONEY, raw) or re.search(r'([0-9][0-9,]*\.[0-9]{2})', str(raw))
+            v = _f(m.group(1)) if m else None
+            if v: return v
+    m = re.search(MONEY, el.get_text(" "))
+    return _f(m.group(1)) if m else None
+
 def ad_generic(h, base):
-    soup = BeautifulSoup(h, "html.parser"); out = []
+    soup = BeautifulSoup(h, "html.parser"); out = []; seen = set()
+    # 1) JSON-LD Product
     for tag in soup.find_all("script", type="application/ld+json"):
         try: data = json.loads(tag.string or "")
         except Exception: continue
-        for node in (data if isinstance(data, list) else [data]):
+        stack = data if isinstance(data, list) else [data]
+        for node in stack:
             if isinstance(node, dict) and node.get("@type") == "Product":
                 off = node.get("offers") or {}
                 if isinstance(off, list): off = off[0] if off else {}
-                p = _f(off.get("price"))
-                if p: out.append({"product_id": node.get("url") or node.get("name"), "title": node.get("name"),
-                                  "url": node.get("url") or base, "price": p, "was_price": None})
+                pr = _f(off.get("price"))
+                if pr: out.append({"product_id": node.get("url") or node.get("name"), "title": node.get("name"),
+                                   "url": node.get("url") or base, "price": pr, "was_price": None})
+    if len(out) >= 3: return out
+    out = []
+    # 2) product-card heuristic (BigCommerce, Magento, Shopify, custom grids)
+    for sel in ["li.product","article.card","li.card",".product-item",".product-card",
+                ".productCard",".product-tile",".grid-product",".item.product-item","[data-product-id]"]:
+        cards = soup.select(sel)
+        if len(cards) < 3: continue
+        for c in cards:
+            a = c.find("a", href=True)
+            if not a: continue
+            href = a.get("href")
+            if not href or href in seen or href.startswith("#"): continue
+            price = _price_from(c)
+            if not price: continue
+            te = c.select_one(".card-title,.product-item-link,.product-title,.card-title a,.name,h2 a,h3 a,h2,h3")
+            title = (te.get_text(strip=True) if te else (a.get("title") or a.get_text(strip=True)))[:120]
+            if not title: continue
+            seen.add(href)
+            out.append({"product_id": href, "title": title, "url": urljoin(base, href),
+                        "price": price, "was_price": None})
+        if len(out) >= 3: return out
     return out
+
 ADAPTERS = {"preppingdeals": ad_preppingdeals, "woocommerce": ad_woocommerce, "generic": ad_generic}
 
 # ---------- scrape ----------
