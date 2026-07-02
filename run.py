@@ -132,6 +132,12 @@ def scrape(cfg):
                 hints = [k for k in ["captcha","cloudflare","enable javascript","access denied","are you human","px-captcha"] if k in low]
                 classes = [c for c in ["card-title","product-item","product-card","data-product-id","grid-product","woocommerce-price"] if c.lower() in low]
                 print(f"   diag {site['id']}: {len(r.text)}B $count={r.text.count('$')} hints={hints} classes={classes}")
+                for _cls in ["card-title","product-item","product-card","grid-product"]:
+                    _i = low.find(_cls)
+                    if _i > 0:
+                        _snip = " ".join(r.text[max(0,_i-160):_i+340].split())
+                        print(f"   snip {site['id']} @{_cls}: {_snip}")
+                        break
         except Exception as e:
             print(f"ERR {site['id']}: {e}")
         time.sleep(delay)
@@ -203,10 +209,10 @@ DEFAULT_CONFIG = {
     {"id":"preppingdeals","url":"https://www.preppingdeals.net/","adapter":"preppingdeals"},
     {"id":"venturesurplus","url":"https://www.venturesurplus.com/shop/?on_sale=1","base":"https://www.venturesurplus.com/","adapter":"woocommerce"},
     {"id":"sportsmansguide","url":"https://www.sportsmansguide.com/productlist?sn=13","adapter":"generic"},
-    {"id":"primaryarms","url":"https://www.primaryarms.com/","adapter":"generic"},
-    {"id":"budsgunshop","url":"https://www.budsgunshop.com/","adapter":"generic"},
+    {"id":"primaryarms","enabled":False,"url":"https://www.primaryarms.com/","adapter":"generic"},
+    {"id":"budsgunshop","enabled":False,"url":"https://www.budsgunshop.com/","adapter":"generic"},
     {"id":"armysurplusworld","url":"https://www.armysurplusworld.com/dailydeals","adapter":"generic"},
-    {"id":"tacticalsurplususa","url":"https://tacticalsurplususa.com/","adapter":"generic"},
+    {"id":"tacticalsurplususa","enabled":False,"url":"https://tacticalsurplususa.com/","adapter":"generic"},
     {"id":"propper","url":"https://www.propper.com/sale.html","adapter":"generic"},
     {"id":"opticsplanet","url":"https://www.opticsplanet.com/clearance-sale.html","adapter":"generic","js":True,"enabled":False},
     {"id":"backcountry","url":"https://www.backcountry.com/rc/flash-sale","adapter":"generic","js":True,"enabled":False},
