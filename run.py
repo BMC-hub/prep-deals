@@ -110,7 +110,10 @@ ADAPTERS = {"preppingdeals": ad_preppingdeals, "woocommerce": ad_woocommerce, "g
 
 # ---------- scrape ----------
 def scrape(cfg):
-    s = cfg.get("settings", {}); headers = {"User-Agent": s.get("user_agent", "PrepDealsBot/1.0")}
+    s = cfg.get("settings", {})
+    headers = {"User-Agent": s.get("user_agent", "Mozilla/5.0"),
+               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+               "Accept-Language": "en-US,en;q=0.9"}
     delay = s.get("request_delay_sec", 3); total = 0
     for site in cfg.get("sites", []):
         if not site.get("enabled", True): continue
@@ -124,6 +127,11 @@ def scrape(cfg):
                 record(f"{site['id']}:{it['product_id']}", site["id"], "", it.get("title",""),
                        it.get("url"), it["price"], it.get("was_price")); n += 1
             print(f"OK {site['id']}: {n} products"); total += n
+            if n == 0:
+                low = r.text.lower()
+                hints = [k for k in ["captcha","cloudflare","enable javascript","access denied","are you human","px-captcha"] if k in low]
+                classes = [c for c in ["card-title","product-item","product-card","data-product-id","grid-product","woocommerce-price"] if c.lower() in low]
+                print(f"   diag {site['id']}: {len(r.text)}B $count={r.text.count('$')} hints={hints} classes={classes}")
         except Exception as e:
             print(f"ERR {site['id']}: {e}")
         time.sleep(delay)
@@ -190,7 +198,7 @@ def dashboard(cfg, out="index.html"):
 # ---------- embedded config (used if config.yaml is missing) ----------
 DEFAULT_CONFIG = {
   "settings": {"min_drop_pct":15,"atl_tolerance_pct":5,"min_points_for_verified":10,
-               "request_delay_sec":3,"user_agent":"Mozilla/5.0 (compatible; PrepDealsBot/1.0)"},
+               "request_delay_sec":3,"user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"},
   "sites": [
     {"id":"preppingdeals","url":"https://www.preppingdeals.net/","adapter":"preppingdeals"},
     {"id":"venturesurplus","url":"https://www.venturesurplus.com/shop/?on_sale=1","base":"https://www.venturesurplus.com/","adapter":"woocommerce"},
